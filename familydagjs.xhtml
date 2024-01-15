@@ -1,0 +1,524 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+	<head>
+		<meta charset="UTF-8" />
+		<script>
+			//<![CDATA[
+
+const familydagjs = {};
+
+//Fileオブジェクトをtextに変換
+//Promiseを使用しているため、使用時はasync/awaitをつける
+familydagjs.convert_file_to_text = function (a_file) {
+	const c_text = new Promise(f_promise);
+	function f_promise(a_resolve, a_reject) {
+		const c_reader = new FileReader();
+		c_reader.addEventListener("load", f_load, false);
+		function f_load() {
+			a_resolve(c_reader.result);
+		}
+		c_reader.readAsText(a_file);
+	}
+	return c_text;
+}
+
+familydagjs.convert_csv_to_json = function(a_csv) {
+	//CSVを2次元配列にする
+	let l_1 = 0;
+	let l_2 = 0;
+	const c_array = [[]];
+	a_csv.replace(/\r?\n$/, "").replace(new RegExp(',|\r?\n|[^,"\r\n][^,\r\n]*|"(?:[^"]|"")*"', "g"), function(a1) {
+		if (a1 === ",") {
+			l_2 += 1;
+			c_array[l_1][l_2] = "";
+		} else if (a1 === "\n" || a1 === "\r\n") {
+			l_1 += 1;
+			c_array[l_1] = [];
+			l_2 = 0;
+		} else if (a1.charAt(0) !== "\"") {
+			c_array[l_1][l_2] = a1;
+		} else {
+			c_array[l_1][l_2] = a1.slice(1, -1).replace(/""/g, "\"");
+		}
+	});
+	
+	// 1列目が空の場合の対応
+	for (let i1 = 1; i1 < c_array.length; i1++) {
+		for (let i2 = 0; i2 < c_array[i1].length; i2++) {
+			if (c_array[i1][i2] === undefined) {
+				c_array[i1][i2] = "";
+			}
+		}
+	}
+	
+	//二次元配列をJSONに変換する
+	const c_json = [];
+	for (let i1 = 1; i1 < c_array.length; i1++) {
+		c_json.push({});
+		for (let i2 = 0; i2 < c_array[i1].length; i2++) {
+			c_json[i1 - 1][c_array[0][i2]] = c_array[i1][i2].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;");
+		}
+	}
+	//この段階では全て文字列型になっている
+	return c_json;
+}
+
+familydagjs.generate_family_dag = function(a_data, a_settings) {
+	// id重複確認
+	const c_id_index = {};
+	for (const c_row of a_data) {
+		if (c_row["type"] !== "") {
+			continue;
+		}
+		if (c_row["id"] === "") {
+			console.log("id空白");
+			continue;
+		}
+		if (c_id_index[c_row["id"]] === undefined) {
+			c_id_index[c_row["id"]] = true;
+		} else {
+			console.log("id重複：" + c_row["id"]);
+		}
+	}
+	
+	// 父系または母系で木構造にする
+	const c_parent_id = a_settings["parent_id"];
+	const c_other_parent_id_index = {"father_id": "mother_id", "mother_id": "father_id"};
+	const c_other_parent_id = c_other_parent_id_index[c_parent_id];
+	
+	// データ読み込み、整列
+	const c_tree = {};
+	const c_id_array = [];
+	for (const c_row of a_data) {
+		if ((c_row["type"] === "" && c_row["id"] !== "") || (c_row["type"] === "marriage" && c_row[c_parent_id] !== "" && c_row[c_other_parent_id] !== "") || (c_row["type"] === "adoption" && c_row["id"] !== "" && (c_row[c_parent_id] !== "" || c_row[c_other_parent_id] !== ""))) { // 有効な個人または有効な婚姻または有効な養子縁組
+			// 出現する個人を追加（親、本人、他方の親の順番）
+			for (const c_id of [c_row[c_parent_id], c_row["id"], c_row[c_other_parent_id]]) {
+				if (c_id !== "" && c_tree[c_id] === undefined) {
+					c_tree[c_id] = {
+						"id": c_id,
+						"name": null,
+						"parent_id": "",
+						"other_parent_id": "",
+						"group_array": [],
+						"adoptive_parent_id_array": [],
+						"adopted_child_array": [],
+						"count": null,
+						"generation": null,
+						"order": null,
+						"line_color": null
+					};
+					c_id_array.push(c_id);
+				}
+			}
+			
+			// 養子縁組
+			if (c_row["type"] === "adoption") {
+				if (c_row[c_parent_id] !== "") {
+					c_tree[c_row["id"]]["adoptive_parent_id_array"].push(c_row[c_parent_id]);
+					c_tree[c_row[c_parent_id]]["adopted_child_array"].push({
+						"id": c_row["id"],
+						"generation": null,
+						"line_order": null
+					});
+				}
+				if (c_row[c_other_parent_id] !== "") {
+					c_tree[c_row["id"]]["adoptive_parent_id_array"].push(c_row[c_other_parent_id]);
+					c_tree[c_row[c_other_parent_id]]["adopted_child_array"].push({
+						"id": c_row["id"],
+						"generation": null,
+						"line_order": null
+					});
+				}
+				continue;
+			}
+			
+			// 表示位置上の親を決定
+			let l_location_parent_id = null; // 表示位置上の親
+			let l_location_other_parent_id = null;
+			if (c_row[c_parent_id] !== "") {
+				l_location_parent_id = c_parent_id;
+				l_location_other_parent_id = c_other_parent_id;
+			} else if (c_row[c_other_parent_id] !== "") {
+				l_location_parent_id = c_other_parent_id;
+				l_location_other_parent_id = c_parent_id;
+			}
+			
+			if (l_location_parent_id === null) { // 両親とも不明
+				continue;
+			}
+			
+			// 両親の組み合わせgroupを追加
+			let l_exist = false;
+			for (let i2 = 0; i2 < c_tree[c_row[l_location_parent_id]]["group_array"].length; i2++) {
+				if (c_tree[c_row[l_location_parent_id]]["group_array"][i2]["other_parent_id"] === c_row[l_location_other_parent_id]) {
+					l_exist = true;
+					break;
+				}
+			}
+			if (l_exist === false) {
+				c_tree[c_row[l_location_parent_id]]["group_array"].push({
+					"other_parent_id": c_row[l_location_other_parent_id],
+					"child_array": [],
+					"count": null,
+					"generation": null,
+					"line_order": null
+				});
+			}
+			
+			// 子を追加
+			if (c_row["type"] === "") {
+				c_tree[c_row["id"]]["parent_id"] = c_row[l_location_parent_id];
+				c_tree[c_row["id"]]["other_parent_id"] = c_row[l_location_other_parent_id];
+				
+				for (let i2 = 0; i2 < c_tree[c_row[l_location_parent_id]]["group_array"].length; i2++) {
+					if (c_tree[c_row[l_location_parent_id]]["group_array"][i2]["other_parent_id"] === c_row[l_location_other_parent_id]) {
+						c_tree[c_row[l_location_parent_id]]["group_array"][i2]["child_array"].push(c_tree[c_row["id"]]);
+						break;
+					}
+				}
+			}
+		}
+	}
+	
+	// 名前の設定
+	for (const c_row of a_data) {
+		if (c_row["type"] === "" && c_row["id"] !== "" && c_row["name"] !== undefined && c_row["name"] !== "") {
+			c_tree[c_row["id"]]["name"] = c_row["name"];
+		}
+	}
+	for (const c_id in c_tree) {
+		if (c_tree[c_id]["name"] === null) {
+			c_tree[c_id]["name"] = c_id.split("__")[0].replaceAll("_", " ");
+			/*
+			const c_array = c_id.split("_");
+			if (c_array.length === 1) {
+				c_tree[c_id]["name"] = c_array[0];
+			} else if (1 < c_array.length) {
+				c_tree[c_id]["name"] = c_array[0] + " " + c_array[1];
+			}
+			*/
+		}
+	}
+	
+	// 子孫の数の合計
+	for (let i1 = 0; i1 < Object.keys(c_tree).length; i1++) {
+		let l_exist = false; // 子孫の数の合計が未確定なものがあればtrue
+		for (const c_id in c_tree) {
+			if (c_tree[c_id]["count"] === null) {
+				let l_total = 1; // 自身の1を加える
+				for (let i3 = 0; i3 < c_tree[c_id]["group_array"].length; i3++) {
+					if (c_tree[c_id]["group_array"][i3]["count"] === null) {
+						// 子孫の数が確定しているものを探して合計
+						let l_sub_total = 0;
+						for (let i4 = 0; i4 < c_tree[c_id]["group_array"][i3]["child_array"].length; i4++) {
+							if (c_tree[c_id]["group_array"][i3]["child_array"][i4]["count"] !== null) {
+								l_sub_total += c_tree[c_id]["group_array"][i3]["child_array"][i4]["count"];
+							} else {
+								l_sub_total = null;
+								break;
+							}
+						}
+						c_tree[c_id]["group_array"][i3]["count"] = l_sub_total;
+					}
+					if (c_tree[c_id]["group_array"][i3]["count"] !== null) {
+						l_total += c_tree[c_id]["group_array"][i3]["count"];
+					} else {
+						l_total = null;
+						break;
+					}
+				}
+				c_tree[c_id]["count"] = l_total;
+			}
+			if (c_tree[c_id]["count"] === null) {
+				l_exist = true;
+			}
+		}
+		if (l_exist === false) {
+			break;
+		}
+	}
+	
+	// 世代順の決定
+	// 親がない場合を0に設定
+	for (const c_id in c_tree) {
+		if (c_tree[c_id]["parent_id"] === "") {
+			c_tree[c_id]["generation"] = 0;
+		}
+	}
+	// 初期値を設定している場合は上書き
+	for (const c_row of a_data) {
+		if (c_row["type"] === "" && c_row["id"] !== "" && c_row["generation"] !== undefined && c_row["generation"] !== "" && c_tree[c_row["id"]]["generation"] === 0) {
+			c_tree[c_row["id"]]["generation"] = Number(c_row["generation"]);
+		}
+	}
+	for (let i1 = 0; i1 < Object.keys(c_tree).length; i1++) {
+		let l_exist = false;
+		for (const c_id in c_tree) {
+			if (c_tree[c_id]["generation"] === null) {
+				continue;
+			}
+			for (let i3 = 0; i3 < c_tree[c_id]["group_array"].length; i3++) {
+				if (c_tree[c_id]["group_array"][i3]["generation"] === null) {
+					l_exist = true;
+					if (c_tree[c_id]["group_array"][i3]["other_parent_id"] === "") {
+						c_tree[c_id]["group_array"][i3]["generation"] = c_tree[c_id]["generation"] + 1;
+					} else if (c_tree[c_tree[c_id]["group_array"][i3]["other_parent_id"]]["generation"] !== null) {
+						c_tree[c_id]["group_array"][i3]["generation"] = Math.max(c_tree[c_id]["generation"], c_tree[c_tree[c_id]["group_array"][i3]["other_parent_id"]]["generation"]) + 1;
+					}
+				}
+				if (c_tree[c_id]["group_array"][i3]["generation"] !== null) {
+					for (let i4 = 0; i4 < c_tree[c_id]["group_array"][i3]["child_array"].length; i4++) {
+						if (c_tree[c_id]["group_array"][i3]["child_array"][i4]["generation"] === null) {
+							l_exist = true;
+							let l_max_generation = c_tree[c_id]["group_array"][i3]["generation"];
+							// 養親
+							for (let i5 = 0; i5 < c_tree[c_id]["group_array"][i3]["child_array"][i4]["adoptive_parent_id_array"].length; i5++) {
+								const c_adoptive_parent_id = c_tree[c_id]["group_array"][i3]["child_array"][i4]["adoptive_parent_id_array"][i5];
+								if (c_tree[c_adoptive_parent_id]["generation"] === null) {
+									l_max_generation = null;
+									break;
+								} else {
+									l_max_generation = Math.max(l_max_generation, c_tree[c_adoptive_parent_id]["generation"] + 1);
+								}
+							}
+							c_tree[c_id]["group_array"][i3]["child_array"][i4]["generation"] = l_max_generation;
+						}
+					}
+				}
+			}
+			// 養子（全員同じ次の世代）
+			for (let i3 = 0; i3 < c_tree[c_id]["adopted_child_array"].length; i3++) {
+				if (c_tree[c_id]["adopted_child_array"][i3]["generation"] === null) {
+					l_exist = true;
+					c_tree[c_id]["adopted_child_array"][i3]["generation"] = c_tree[c_id]["generation"] + 1;
+				}
+			}
+		}
+		if (l_exist === false) {
+			break;
+		}
+	}
+	
+	// 名前の表示順の決定
+	const c_id_array_2 = [];
+	let l_total_order = 0;
+	for (const c_id of c_id_array) {
+		if (c_tree[c_id]["parent_id"] === "") {
+			c_tree[c_id]["order"] = l_total_order;
+			c_id_array_2[l_total_order] = c_id;
+			l_total_order += c_tree[c_id]["count"];
+		}
+	}
+	for (let i1 = 0; i1 < Object.keys(c_tree).length; i1++) {
+		let l_exist = false;
+		for (const c_id in c_tree) {
+			if (c_tree[c_id]["order"] === null) {
+				l_exist = true;
+				continue;
+			}
+			let l_sub_total = c_tree[c_id]["order"] + 1; // 自身を除く
+			for (let i3 = 0; i3 < c_tree[c_id]["group_array"].length; i3++) {
+				c_tree[c_id]["group_array"][i3]["order"] = l_sub_total;
+				for (let i4 = 0; i4 < c_tree[c_id]["group_array"][i3]["child_array"].length; i4++) {
+					c_tree[c_id]["group_array"][i3]["child_array"][i4]["order"] = l_sub_total;
+					c_id_array_2[l_sub_total] = c_tree[c_id]["group_array"][i3]["child_array"][i4]["id"];
+					l_sub_total += c_tree[c_id]["group_array"][i3]["child_array"][i4]["count"];
+				}
+			}
+		}
+		if (l_exist === false) {
+			break;
+		}
+	}
+	
+	// 線の表示順の決定
+	const c_line_count_array = [];
+	for (let i1 = 0; i1 < Object.keys(c_tree).length; i1++) { // 各世代
+		let l_order = 0;
+		for (const c_id of c_id_array_2) {
+			for (let i3 = 0; i3 < c_tree[c_id]["group_array"].length; i3++) {
+				if (c_tree[c_id]["group_array"][i3]["generation"] === i1 && c_tree[c_id]["group_array"][i3]["other_parent_id"] !== "") {
+					c_tree[c_id]["group_array"][i3]["line_order"] = l_order;
+					l_order += 1;
+				}
+			}
+			// 養子（全員同じ世代）
+			if (0 < c_tree[c_id]["adopted_child_array"].length && c_tree[c_id]["adopted_child_array"][0]["generation"] === i1) {
+				for (let i3 = 0; i3 < c_tree[c_id]["adopted_child_array"].length; i3++) {
+					c_tree[c_id]["adopted_child_array"][i3]["line_order"] = l_order;
+				}
+				l_order += 1;
+			}
+		}
+		c_line_count_array[i1] = l_order;
+	}
+	
+	// 世代の表示位置
+	const c_generation_x_array = [0];
+	for (let i1 = 1; i1 < Object.keys(c_tree).length; i1++) { // 各世代
+		c_generation_x_array[i1] = c_generation_x_array[i1 - 1] + (a_settings["text_length"] * a_settings["font_size"] + a_settings["right_offset"] + (c_line_count_array[i1] + 1) * a_settings["line_interval"] + a_settings["left_offset"]);
+	}
+	
+	
+	// 線の色の設定
+	for (const c_row of a_data) {
+		if (c_row["type"] === "" && c_row["id"] !== "" && c_row["line_color"] !== undefined && c_row["line_color"] !== "") {
+			c_tree[c_row["id"]]["line_color"] = c_row["line_color"];
+		}
+	}
+	// 最初がない場合
+	for (const c_id in c_tree) {
+		if (c_tree[c_id]["parent_id"] === "" && c_tree[c_id]["line_color"] === null) {
+			c_tree[c_id]["line_color"] = "#C0C0C0";
+		}
+	}
+	// 子の設定
+	for (let i1 = 0; i1 < Object.keys(c_tree).length; i1++) {
+		let l_exist = false;
+		for (const c_id in c_tree) {
+			if (c_tree[c_id]["line_color"] === null) {
+				l_exist = true;
+				continue;
+			}
+			for (let i3 = 0; i3 < c_tree[c_id]["group_array"].length; i3++) {
+				for (let i4 = 0; i4 < c_tree[c_id]["group_array"][i3]["child_array"].length; i4++) {
+					if (c_tree[c_id]["group_array"][i3]["child_array"][i4]["line_color"] === null) {
+						c_tree[c_id]["group_array"][i3]["child_array"][i4]["line_color"] = c_tree[c_id]["line_color"];
+					}
+				}
+			}
+		}
+		if (l_exist === false) {
+			break;
+		}
+	}
+	
+	// 人数、世代数の計算
+	let l_max_generation = 0;
+	let l_max_order = 0;
+	for (const c_id in c_tree) {
+		l_max_generation = Math.max(l_max_generation, c_tree[c_id]["generation"]);
+		l_max_order = Math.max(l_max_order, c_tree[c_id]["order"]);
+	}
+	
+	// SVG生成
+	let l_boxes = "";
+	let l_texts = "";
+	let l_lines = "";
+	let l_lines_2 = "";
+	let l_lines_3 = "";
+	let l_circles_2 = "";
+	let l_circles_3 = "";
+	
+	const c_top_y = 0;
+	const c_left_x = a_settings["font_size"] / 2;
+	//const c_svg_width = c_generation_x_array[l_max_generation] + (a_settings["text_length"] + 1) * a_settings["font_size"];
+	const c_svg_width = c_generation_x_array[l_max_generation + 1];
+	const c_svg_height = (l_max_order + 2) * a_settings["text_interval"];
+	
+	for (const c_id in c_tree) {
+		const c_base_line = 1/8;
+		let l_padding = 0;
+		if (a_settings["text_box"] === true) {
+			l_padding += a_settings["font_size"] / 8;
+		}
+		const c_x = c_left_x + c_generation_x_array[c_tree[c_id]["generation"]];
+		const c_y = c_top_y + (c_tree[c_id]["order"] + 1) * a_settings["text_interval"];
+		const c_text_x = c_x + l_padding;
+		const c_text_y = c_y + a_settings["font_size"] / 2 - a_settings["font_size"] * c_base_line;
+		const c_box_x = c_x;
+		const c_box_y = c_y - a_settings["font_size"] / 2 - l_padding;
+		const c_box_width = a_settings["text_length"] * a_settings["font_size"];
+		const c_box_height = a_settings["font_size"] + l_padding * 2;
+		if (a_settings["text_box"] === true) {
+			l_boxes += "<rect x=\"" + String(c_box_x) + "\" y=\"" + String(c_box_y) + "\" width=\"" + String(c_box_width) + "\" height=\"" + String(c_box_height) + "\" />";
+		}
+		l_texts += "<text style=\"font-size: " + a_settings["font_size"] + "px;\" x=\"" + String(c_text_x) + "\" y=\"" + String(c_text_y) + "\">" + c_tree[c_id]["name"] + "</text>";
+	}
+	
+	for (const c_id in c_tree) {
+		const c_parent_x = c_left_x + c_generation_x_array[c_tree[c_id]["generation"]] + a_settings["text_length"] * a_settings["font_size"];
+		const c_parent_y = c_top_y + (c_tree[c_id]["order"] + 1) * a_settings["text_interval"];
+		
+		// 養子の線
+		for (let i3 = 0; i3 < c_tree[c_id]["adopted_child_array"].length; i3++) {
+			const c_group_x = c_left_x + c_generation_x_array[c_tree[c_id]["adopted_child_array"][i3]["generation"] - 1] + a_settings["text_length"] * a_settings["font_size"] + a_settings["right_offset"] + (c_tree[c_id]["adopted_child_array"][i3]["line_order"] + 1) * a_settings["line_interval"];
+			const c_child_x = c_left_x + c_generation_x_array[c_tree[c_tree[c_id]["adopted_child_array"][i3]["id"]]["generation"]];
+			const c_child_y = c_top_y + (c_tree[c_tree[c_id]["adopted_child_array"][i3]["id"]]["order"] + 1) * a_settings["text_interval"];
+			l_lines_3 += "<path style=\"stroke: " + c_tree[c_id]["line_color"] + ";\" d=\"M " + String(c_parent_x) + "," + String(c_parent_y) + " L " + String(c_group_x) +  "," + String(c_parent_y) + " L " + String(c_group_x) +  "," + String(c_child_y) + " L " + String(c_child_x) +  "," + String(c_child_y) + "\" />";
+			l_circles_3 += "<circle cx=\"" + String(c_group_x) + "\" cy=\"" + String(c_child_y) + "\" r=\"" + String(a_settings["line_width"]) + "\" />";
+		}
+		
+		for (let i3 = 0; i3 < c_tree[c_id]["group_array"].length; i3++) {
+			const c_group_x = c_left_x + c_generation_x_array[c_tree[c_id]["group_array"][i3]["generation"] - 1] + a_settings["text_length"] * a_settings["font_size"] + a_settings["right_offset"] + (c_tree[c_id]["group_array"][i3]["line_order"] + 1) * a_settings["line_interval"];
+			let l_group_y = c_parent_y;
+			if (0 < c_tree[c_id]["group_array"][i3]["child_array"].length) {
+				l_group_y = c_top_y + (c_tree[c_id]["group_array"][i3]["child_array"][0]["order"] + 1) * a_settings["text_interval"];
+			}
+			// 親子間の線
+			for (let i4 = 0; i4 < c_tree[c_id]["group_array"][i3]["child_array"].length; i4++) {
+				const c_child_x = c_left_x + c_generation_x_array[c_tree[c_id]["group_array"][i3]["child_array"][i4]["generation"]];
+				const c_child_y = c_top_y + (c_tree[c_id]["group_array"][i3]["child_array"][i4]["order"] + 1) * a_settings["text_interval"];
+				l_lines += "<path style=\"stroke: " + c_tree[c_id]["line_color"] + ";\" d=\"M " + String(c_parent_x) + "," + String(c_parent_y) + " L " + String(c_parent_x + a_settings["right_offset"]) +  "," + String(c_parent_y) + " L " + String(c_parent_x + a_settings["right_offset"]) +  "," + String(l_group_y) + " L " + String(c_child_x - a_settings["left_offset"]) +  "," + String(l_group_y) + " L " + String(c_child_x - a_settings["left_offset"]) +  "," + String(c_child_y) + " L " + String(c_child_x) +  "," + String(c_child_y) + "\" />";
+			}
+			// 両親間の線
+			if (c_tree[c_id]["group_array"][i3]["other_parent_id"] !== "") {
+				const c_other_parent_x = c_left_x + c_generation_x_array[c_tree[c_tree[c_id]["group_array"][i3]["other_parent_id"]]["generation"]] + a_settings["text_length"] * a_settings["font_size"];
+				const c_other_parent_y = c_top_y + (c_tree[c_tree[c_id]["group_array"][i3]["other_parent_id"]]["order"] + 1) * a_settings["text_interval"];
+				if (c_tree[c_id]["group_array"][i3]["child_array"].length === 0) {
+					l_lines_2 += "<path style=\"stroke: " + c_tree[c_id]["line_color"] + ";\" d=\"M " + String(c_parent_x) + "," + String(c_parent_y) + " L " + String(c_group_x) +  "," + String(c_parent_y) + "\" />";
+				}
+				l_lines_2 += "<path style=\"stroke: " + c_tree[c_tree[c_id]["group_array"][i3]["other_parent_id"]]["line_color"] + ";\" d=\"M " + String(c_other_parent_x) + "," + String(c_other_parent_y) + " L " + String(c_group_x) +  "," + String(c_other_parent_y) + " L " + String(c_group_x) +  "," + String(l_group_y) + "\" />";
+				l_circles_2 += "<circle cx=\"" + String(c_group_x) + "\" cy=\"" + String(l_group_y) + "\" r=\"" + String(a_settings["line_width"]) + "\" />";
+			}
+		}
+	}
+	
+	let l_out_svg = "";
+	l_out_svg += "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" version=\"1.1\" baseProfile=\"full\" viewBox=\"0 0 " + String(c_svg_width) + " " + String(c_svg_height) + "\" width=\"" + String(c_svg_width) + "\" height=\"" + String(c_svg_height) + "\">";
+	l_out_svg += "<g style=\"fill: none; stroke: #000000; stroke-width: 1;\">" + l_boxes + "</g>";
+	l_out_svg += "<g style=\"font-size: " + a_settings["font_size"] + "px; line-height: 1; font-family: " + a_settings["font_family"] + ";\">" + l_texts + "</g>";
+	l_out_svg += "<g style=\"fill: none; stroke: #000000; stroke-width: " + String(a_settings["line_width"]) + ";\">" + l_lines + "</g>";
+	l_out_svg += "<g style=\"fill: none; stroke: #000000; stroke-width: " + String(a_settings["line_width"]) + ";\">" + l_lines_2 + "</g>";
+	l_out_svg += "<g style=\"fill: none; stroke: #000000; stroke-width: " + String(a_settings["line_width"]) + "; stroke-dasharray: " + String(a_settings["line_width"]) + ";\">" + l_lines_3 + "</g>";
+	l_out_svg += "<g style=\"fill: #FFFFFF; stroke: #000000; stroke-width: " + String(a_settings["line_width"]) + ";\">" + l_circles_2 + "</g>";
+	l_out_svg += "<g style=\"fill: #FFFFFF; stroke: #000000; stroke-width: " + String(a_settings["line_width"]) + ";\">" + l_circles_3 + "</g>";
+	l_out_svg += "</svg>";
+	
+	return (l_out_svg);
+}
+
+			//]]>
+		</script>
+		<title>系図</title>
+	</head>
+	<body>
+		<div>CSVファイルを読み込むと系図を表示します：<input type="file" id="input_csv" accept="text/csv" /></div>
+		<div id="div_id"></div>
+		<script>
+			//<![CDATA[
+const c_settings = {
+	"parent_id": "father_id", //表示は父系基準とする（father_id）、mother_id
+	"line_interval": 8, // 線の間隔（px）
+	"text_interval": 24, // 文字の間隔（px）
+	"font_size": 16, // フォントサイズ（px）
+	"left_offset": 12, // 左の字と線の間隔（px）
+	"right_offset": 12, // 右の字と線の間隔（px）
+	"text_length": 8, // 想定する最大文字数
+	"line_width": 3, // 線の幅（px）
+	"text_box": true, // 文字の囲み線
+	"font_family": "'Source Han Sans JP'", // フォント名（'囲み）
+};
+
+document.getElementById("input_csv").onchange = f_read_csv;
+async function f_read_csv(a) {
+	const c_text = await familydagjs.convert_file_to_text(a.target.files[0]);
+	const c_data = familydagjs.convert_csv_to_json(c_text);
+	document.getElementById("div_id").innerHTML = familydagjs.generate_family_dag(c_data, c_settings);
+}
+
+			//]]>
+		</script>
+	</body>
+</html>
