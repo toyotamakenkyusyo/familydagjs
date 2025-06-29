@@ -105,8 +105,11 @@ familydagjs.generate_family_dag = function(a_data, a_settings) {
 						"adopted_child_array": [],
 						"count": null,
 						"generation": null,
+						"top": null,
 						"order": null,
-						"line_color": null
+						"line_color": null,
+						"embedded": null,
+						"embedded_order": 0
 					};
 					c_id_array.push(c_id);
 				}
@@ -180,6 +183,103 @@ familydagjs.generate_family_dag = function(a_data, a_settings) {
 			}
 		}
 	}
+	for (const c_row of a_data) {
+		if (c_row["type"] === "" && c_row["id"] !== "" && c_row["top"] !== undefined && c_row["top"] !== "") {
+			c_tree[c_row["id"]]["top"] = c_row["top"];
+		}
+	}
+	
+	// 表示上の位置の変更
+	if (a_settings["embedded"] === true) {
+		for (const c_id in c_tree) {
+			if (c_tree[c_id]["top"] !== undefined && c_tree[c_id]["top"] === "1") {
+				continue;
+			}
+			if (c_tree[c_id]["parent_id"] === "") {
+				c_tree[c_id]["embedded"] = c_id;
+				c_tree[c_id]["embedded_order"] = null;
+				// 子孫のembeddedを設定
+				let l_next = [c_id];
+				for (let i1 = 0; i1 < Object.keys(c_tree).length; i1++) {
+					const c_next_next = [];
+					for (const c_id_2 of l_next) {
+						for (let i3 = 0; i3 < c_tree[c_id_2]["group_array"].length; i3++) {
+							for (let i4 = 0; i4 < c_tree[c_id_2]["group_array"][i3]["child_array"].length; i4++) {
+								if (c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["embedded"] === null) { // 別のembeddedでない
+									c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["embedded"] = c_id;
+									c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["embedded_order"] = null;
+									c_next_next.push(c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["id"]);
+								}
+							}
+						}
+					}
+					if (c_next_next.length === 0) {
+						break;
+					}
+					l_next = c_next_next;
+				}
+				// embeddedの位置を指定
+				// c_id_arrayの順で、親（養親）として最初に出現する位置に追加
+				let l_embedded_group = null;
+				for (const c_id_2 of c_id_array) {
+					for (let i3 = 0; i3 < c_tree[c_id_2]["group_array"].length; i3++) {
+						const c_other_parent_id = c_tree[c_id_2]["group_array"][i3]["other_parent_id"];
+						if (c_other_parent_id !== "" && c_tree[c_other_parent_id]["embedded"] === c_id) {
+							if (l_embedded_group === null) {
+								l_embedded_group = c_tree[c_id_2]["group_array"][i3];
+							}
+						}
+						for (let i4 = 0; i4 < c_tree[c_id_2]["group_array"][i3]["child_array"].length; i4++) {
+							if (c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["parent_id"] === "") { // embeddedの場合
+								continue;
+							}
+							// 養親
+							for (let i5 = 0; i5 < c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["adoptive_parent_id_array"].length; i5++) {
+								const c_adoptive_parent_id = c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["adoptive_parent_id_array"][i5];
+								if (c_tree[c_adoptive_parent_id]["embedded"] === c_id) {
+									if (l_embedded_group === null) {
+										l_embedded_group = c_tree[c_id_2]["group_array"][i3];
+									}
+								}
+							}
+						}
+					}
+				}
+				if (l_embedded_group !== null) {
+					l_embedded_group["child_array"].unshift(c_tree[c_id]);
+				} else { // 孤立している場合
+					for (const c_id_2 in c_tree) {
+						if (c_tree[c_id_2]["embedded"] === c_id) {
+							c_tree[c_id_2]["embedded"] = null; // embeddedしない
+							c_tree[c_id_2]["embedded_order"] = 0;
+						}
+					}
+				}
+			}
+		}
+		for (let i1 = 0; i1 < Object.keys(c_tree).length; i1++) {
+			let l_exist = false;
+			for (const c_id_2 in c_tree) {
+				for (let i3 = 0; i3 < c_tree[c_id_2]["group_array"].length; i3++) {
+					for (let i4 = 0; i4 < c_tree[c_id_2]["group_array"][i3]["child_array"].length; i4++) {
+						if (c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["parent_id"] === "") { // 最初の場合
+							if (c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["embedded_order"] === null) {
+								c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["embedded_order"] = c_tree[c_id_2]["embedded_order"] + 1;
+								l_exist = true;
+							}
+						} else if (c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["embedded_order"] === null) {
+							c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["embedded_order"] = c_tree[c_id_2]["embedded_order"];
+							l_exist = true;
+						}
+					}
+				}
+			}
+			if (l_exist === false) {
+				break;
+			}
+		}
+	}
+	
 	
 	// 名前の設定
 	for (const c_row of a_data) {
@@ -190,14 +290,6 @@ familydagjs.generate_family_dag = function(a_data, a_settings) {
 	for (const c_id in c_tree) {
 		if (c_tree[c_id]["name"] === null) {
 			c_tree[c_id]["name"] = c_id.split("__")[0].replaceAll("_", " ");
-			/*
-			const c_array = c_id.split("_");
-			if (c_array.length === 1) {
-				c_tree[c_id]["name"] = c_array[0];
-			} else if (1 < c_array.length) {
-				c_tree[c_id]["name"] = c_array[0] + " " + c_array[1];
-			}
-			*/
 		}
 	}
 	
@@ -300,11 +392,52 @@ familydagjs.generate_family_dag = function(a_data, a_settings) {
 		}
 	}
 	
+	// 埋め込みの世代を調整
+	// 最もずれが少ないところに合わせる
+	for (const c_id in c_tree) {
+		if (c_tree[c_id]["parent_id"] === "" && c_tree[c_id]["embedded"] !== null) {
+			let l_max_shift = Number.MAX_SAFE_INTEGER;
+			// 埋め込みの一族が親（養親）として出現する場合に、右へずらせる余裕があるかを確認する
+			for (const c_id_2 in c_tree) {
+				for (let i3 = 0; i3 < c_tree[c_id_2]["group_array"].length; i3++) {
+					if (c_tree[c_id_2]["group_array"][i3]["other_parent_id"] !== "" && c_tree[c_tree[c_id_2]["group_array"][i3]["other_parent_id"]]["embedded"] === c_id) {
+						l_max_shift = Math.min(l_max_shift, c_tree[c_id_2]["group_array"][i3]["generation"] - (c_tree[c_tree[c_id_2]["group_array"][i3]["other_parent_id"]]["generation"] + 1));
+					}
+					for (let i4 = 0; i4 < c_tree[c_id_2]["group_array"][i3]["child_array"].length; i4++) {
+						if (c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["embedded"] !== c_id) { //別のembedded
+							continue;
+						}
+						// 養親
+						for (let i5 = 0; i5 < c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["adoptive_parent_id_array"].length; i5++) {
+							const c_adoptive_parent_id = c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["adoptive_parent_id_array"][i5];
+							if (c_tree[c_adoptive_parent_id]["embedded"] === c_id) {
+								l_max_shift = Math.min(l_max_shift, c_tree[c_id_2]["group_array"][i3]["child_array"][i4]["generation"] - (c_tree[c_adoptive_parent_id]["generation"] + 1));
+							}
+						}
+					}
+				}
+			}
+			// ずらす
+			if (l_max_shift === Number.MAX_SAFE_INTEGER) {
+				continue;
+			}
+			for (const c_id_2 in c_tree) {
+				if (c_tree[c_id_2]["embedded"] === c_id) {
+					c_tree[c_id_2]["generation"] += l_max_shift;
+					for (let i3 = 0; i3 < c_tree[c_id_2]["group_array"].length; i3++) {
+						c_tree[c_id_2]["group_array"][i3]["generation"] += l_max_shift;
+					}
+				}
+			}
+		}
+	}
+	
+	
 	// 名前の表示順の決定
 	const c_id_array_2 = [];
 	let l_total_order = 0;
 	for (const c_id of c_id_array) {
-		if (c_tree[c_id]["parent_id"] === "") {
+		if (c_tree[c_id]["parent_id"] === "" && c_tree[c_id]["embedded"] === null) {
 			c_tree[c_id]["order"] = l_total_order;
 			c_id_array_2[l_total_order] = c_id;
 			l_total_order += c_tree[c_id]["count"];
@@ -335,7 +468,13 @@ familydagjs.generate_family_dag = function(a_data, a_settings) {
 	// 線の表示順の決定
 	const c_line_count_array = [];
 	for (let i1 = 0; i1 < Object.keys(c_tree).length; i1++) { // 各世代
-		let l_order = 0;
+		let l_max_embedded = 0;
+		for (const c_id of c_id_array_2) {
+			if (c_tree[c_id]["generation"] === i1 && 0 < c_tree[c_id]["group_array"].length) {
+				l_max_embedded = Math.max(l_max_embedded, c_tree[c_id]["embedded_order"]);
+			}
+		}
+		let l_order = l_max_embedded;
 		for (const c_id of c_id_array_2) {
 			for (let i3 = 0; i3 < c_tree[c_id]["group_array"].length; i3++) {
 				if (c_tree[c_id]["group_array"][i3]["generation"] === i1 && c_tree[c_id]["group_array"][i3]["other_parent_id"] !== "") {
@@ -401,7 +540,7 @@ familydagjs.generate_family_dag = function(a_data, a_settings) {
 		l_max_generation = Math.max(l_max_generation, c_tree[c_id]["generation"]);
 		l_max_order = Math.max(l_max_order, c_tree[c_id]["order"]);
 	}
-	
+	console.log(c_tree);
 	// SVG生成
 	let l_boxes = "";
 	let l_texts = "";
@@ -453,20 +592,35 @@ familydagjs.generate_family_dag = function(a_data, a_settings) {
 		for (let i3 = 0; i3 < c_tree[c_id]["group_array"].length; i3++) {
 			const c_group_x = c_left_x + c_generation_x_array[c_tree[c_id]["group_array"][i3]["generation"] - 1] + a_settings["text_length"] * a_settings["font_size"] + a_settings["right_offset"] + (c_tree[c_id]["group_array"][i3]["line_order"] + 1) * a_settings["line_interval"];
 			let l_group_y = c_parent_y;
-			if (0 < c_tree[c_id]["group_array"][i3]["child_array"].length) {
-				l_group_y = c_top_y + (c_tree[c_id]["group_array"][i3]["child_array"][0]["order"] + 1) * a_settings["text_interval"];
+			let l_exist = false; // 子の存在
+			for (let i4 = 0; i4 < c_tree[c_id]["group_array"][i3]["child_array"].length; i4++) {
+				if (c_tree[c_id]["group_array"][i3]["child_array"][i4]["parent_id"] !== "") {
+					l_exist = true;
+				}
+			}
+			if (l_exist === true) {
+				for (let i4 = 0; i4 < c_tree[c_id]["group_array"][i3]["child_array"].length; i4++) {
+					if (c_tree[c_id]["group_array"][i3]["child_array"][i4]["parent_id"] === "") { // embeddedの場合
+						continue;
+					}
+					l_group_y = c_top_y + (c_tree[c_id]["group_array"][i3]["child_array"][i4]["order"] + 1) * a_settings["text_interval"];
+					break;
+				}
 			}
 			// 親子間の線
 			for (let i4 = 0; i4 < c_tree[c_id]["group_array"][i3]["child_array"].length; i4++) {
+				if (c_tree[c_id]["group_array"][i3]["child_array"][i4]["parent_id"] === "") { // embeddedの場合
+					continue;
+				}
 				const c_child_x = c_left_x + c_generation_x_array[c_tree[c_id]["group_array"][i3]["child_array"][i4]["generation"]];
 				const c_child_y = c_top_y + (c_tree[c_id]["group_array"][i3]["child_array"][i4]["order"] + 1) * a_settings["text_interval"];
-				l_lines += "<path style=\"stroke: " + c_tree[c_id]["line_color"] + ";\" d=\"M " + String(c_parent_x) + "," + String(c_parent_y) + " L " + String(c_parent_x + a_settings["right_offset"]) +  "," + String(c_parent_y) + " L " + String(c_parent_x + a_settings["right_offset"]) +  "," + String(l_group_y) + " L " + String(c_child_x - a_settings["left_offset"]) +  "," + String(l_group_y) + " L " + String(c_child_x - a_settings["left_offset"]) +  "," + String(c_child_y) + " L " + String(c_child_x) +  "," + String(c_child_y) + "\" />";
+				l_lines += "<path style=\"stroke: " + c_tree[c_id]["line_color"] + ";\" d=\"M " + String(c_parent_x) + "," + String(c_parent_y) + " L " + String(c_parent_x + a_settings["right_offset"] + c_tree[c_id]["embedded_order"] * a_settings["line_interval"]) +  "," + String(c_parent_y) + " L " + String(c_parent_x + a_settings["right_offset"] + c_tree[c_id]["embedded_order"] * a_settings["line_interval"]) +  "," + String(l_group_y) + " L " + String(c_child_x - a_settings["left_offset"]) +  "," + String(l_group_y) + " L " + String(c_child_x - a_settings["left_offset"]) +  "," + String(c_child_y) + " L " + String(c_child_x) +  "," + String(c_child_y) + "\" />";
 			}
 			// 両親間の線
 			if (c_tree[c_id]["group_array"][i3]["other_parent_id"] !== "") {
 				const c_other_parent_x = c_left_x + c_generation_x_array[c_tree[c_tree[c_id]["group_array"][i3]["other_parent_id"]]["generation"]] + a_settings["text_length"] * a_settings["font_size"];
 				const c_other_parent_y = c_top_y + (c_tree[c_tree[c_id]["group_array"][i3]["other_parent_id"]]["order"] + 1) * a_settings["text_interval"];
-				if (c_tree[c_id]["group_array"][i3]["child_array"].length === 0) {
+				if (l_exist === false) {
 					l_lines_2 += "<path style=\"stroke: " + c_tree[c_id]["line_color"] + ";\" d=\"M " + String(c_parent_x) + "," + String(c_parent_y) + " L " + String(c_group_x) +  "," + String(c_parent_y) + "\" />";
 				}
 				l_lines_2 += "<path style=\"stroke: " + c_tree[c_tree[c_id]["group_array"][i3]["other_parent_id"]]["line_color"] + ";\" d=\"M " + String(c_other_parent_x) + "," + String(c_other_parent_y) + " L " + String(c_group_x) +  "," + String(c_other_parent_y) + " L " + String(c_group_x) +  "," + String(l_group_y) + "\" />";
@@ -505,10 +659,11 @@ const c_settings = {
 	"font_size": 16, // フォントサイズ（px）
 	"left_offset": 12, // 左の字と線の間隔（px）
 	"right_offset": 12, // 右の字と線の間隔（px）
-	"text_length": 8, // 想定する最大文字数
+	"text_length": 9, // 想定する最大文字数
 	"line_width": 3, // 線の幅（px）
 	"text_box": true, // 文字の囲み線
 	"font_family": "'Source Han Sans JP'", // フォント名（'囲み）
+	"embedded": true // 埋め込み表示
 };
 
 document.getElementById("input_csv").onchange = f_read_csv;
